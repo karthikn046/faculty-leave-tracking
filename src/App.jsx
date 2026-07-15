@@ -56,11 +56,26 @@ const FONT_IMPORT =
 const SUPABASE_URL = "https://jwgynlwyrtiqqndxkkze.supabase.co";
 const SUPABASE_KEY = "sb_publishable_4TyTJXHXorZ_i4EESV4vaQ_-zl8sgH0";
 const REST = `${SUPABASE_URL}/rest/v1`;
-const sbHeaders = {
-  apikey: SUPABASE_KEY,
-  Authorization: `Bearer ${SUPABASE_KEY}`,
-  "Content-Type": "application/json",
-};
+
+async function authSignIn(email, password) {
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+    method: "POST",
+    headers: { apikey: SUPABASE_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error_description || data.msg || "Invalid email or password.");
+  }
+  return data; // { access_token, refresh_token, user: { user_metadata: {...} } }
+}
+function authHeaders(accessToken) {
+  return {
+    apikey: SUPABASE_KEY,
+    Authorization: `Bearer ${accessToken || SUPABASE_KEY}`,
+    "Content-Type": "application/json",
+  };
+}
 
 // DB row (snake_case) -> app record (camelCase)
 function fromDb(row) {
@@ -103,8 +118,8 @@ function toDbInsert(record) {
   };
 }
 
-async function fetchAllRequests() {
-  const res = await fetch(`${REST}/requests?select=*&order=applied_on.desc`, { headers: sbHeaders });
+async function fetchAllRequests(token) {
+  const res = await fetch(`${REST}/requests?select=*&order=applied_on.desc`, { headers: authHeaders(token) });
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
     throw new Error(`Fetch failed (${res.status}): ${detail}`);
@@ -112,10 +127,10 @@ async function fetchAllRequests() {
   const rows = await res.json();
   return rows.map(fromDb);
 }
-async function insertRequestDb(record) {
+async function insertRequestDb(record, token) {
   const res = await fetch(`${REST}/requests`, {
     method: "POST",
-    headers: { ...sbHeaders, Prefer: "return=representation" },
+    headers: { ...authHeaders(token), Prefer: "return=representation" },
     body: JSON.stringify(toDbInsert(record)),
   });
   if (!res.ok) {
@@ -125,10 +140,10 @@ async function insertRequestDb(record) {
   const rows = await res.json();
   return fromDb(rows[0]);
 }
-async function updateRequestDb(id, status, hodComment) {
+async function updateRequestDb(id, status, hodComment, token) {
   const res = await fetch(`${REST}/requests?id=eq.${id}`, {
     method: "PATCH",
-    headers: { ...sbHeaders, Prefer: "return=representation" },
+    headers: { ...authHeaders(token), Prefer: "return=representation" },
     body: JSON.stringify({ status, hod_comment: hodComment || null, actioned_on: new Date().toISOString() }),
   });
   if (!res.ok) {
@@ -156,6 +171,13 @@ async function loadProfile() {
 async function persistProfile(p) {
   try {
     localStorage.setItem(PROFILE_KEY, JSON.stringify(p));
+  } catch {
+    /* non-fatal */
+  }
+}
+async function clearProfile() {
+  try {
+    localStorage.removeItem(PROFILE_KEY);
   } catch {
     /* non-fatal */
   }
@@ -264,79 +286,95 @@ function StatCard({ label, value, accent }) {
 /*  Onboarding                                                             */
 /* ---------------------------------------------------------------------- */
 
-function Onboarding({ onDone }) {
-  const [role, setRole] = useState("faculty");
-  const [name, setName] = useState("");
-  const [department, setDepartment] = useState(DEPARTMENTS[0]);
+function Login({ onDone }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
 
-  const canSubmit = name.trim().length > 1;
+  const canSubmit = email.trim().length > 3 && password.length > 0 && !loading;
+
+  async function handleSubmit() {
+    setErr("");
+    setLoading(true);
+    try {
+      const data = await authSignIn(email.trim(), password);
+      const meta = data.user?.user_metadata || {};
+      if (!meta.role || !meta.department) {
+        throw new Error("This account is missing role/department info. Ask your admin to set it up.");
+      }
+      onDone({
+        role: meta.role,
+        name: meta.name || data.user.email,
+        department: meta.department,
+        accessToken: data.access_token,
+        refreshToken: data.refresh_token,
+      });
+    } catch (e) {
+      setErr(e.message || "Couldn't sign in.");
+    }
+    setLoading(false);
+  }
 
   return (
     <div style={{ minHeight: "100vh", background: C.paper, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
       <style>{FONT_IMPORT}</style>
-      <div style={{ width: "100%", maxWidth: 440, background: C.card, border: `1px solid ${C.rule}`, borderRadius: 12, padding: "36px 32px", boxShadow: "0 20px 50px rgba(27,42,74,0.12)" }}>
+      <div style={{ width: "100%", maxWidth: 420, background: C.card, border: `1px solid ${C.rule}`, borderRadius: 12, padding: "36px 32px", boxShadow: "0 20px 50px rgba(27,42,74,0.12)" }}>
         <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: "0.18em", color: C.brassDeep, textTransform: "uppercase", marginBottom: 6 }}>
-          Register &amp; Sign In
+          Sign In
         </div>
         <h1 style={{ fontFamily: "Lora, serif", fontSize: 26, color: C.ink, margin: "0 0 6px" }}>Faculty Leave Ledger</h1>
         <p style={{ fontFamily: "Inter, sans-serif", fontSize: 13.5, color: C.inkSoft, margin: "0 0 24px" }}>
-          Tell us who's signing in. This name and department will appear on your requests.
+          Sign in with the email and password given to you by your administrator.
         </p>
 
-        <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
-          {[
-            { key: "faculty", label: "Faculty", icon: User },
-            { key: "hod", label: "Head of Dept.", icon: Building2 },
-          ].map(({ key, label, icon: Icon }) => (
-            <button
-              key={key}
-              onClick={() => setRole(key)}
-              style={{
-                flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 6,
-                padding: "14px 8px", borderRadius: 8, cursor: "pointer",
-                border: `1.5px solid ${role === key ? C.ink : C.rule}`,
-                background: role === key ? C.ink : "transparent",
-                color: role === key ? C.paper : C.inkSoft,
-                fontFamily: "Inter, sans-serif", fontSize: 13, fontWeight: 600,
-                transition: "all 0.15s ease",
-              }}
-            >
-              <Icon size={18} />
-              {label}
-            </button>
-          ))}
-        </div>
-
         <label style={{ display: "block", fontFamily: "Inter, sans-serif", fontSize: 12.5, color: C.inkSoft, marginBottom: 6 }}>
-          Full name
+          Email
         </label>
         <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="e.g. Dr. Meera Nair"
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="you@college.edu"
           style={inputStyle}
+          onKeyDown={(e) => e.key === "Enter" && canSubmit && handleSubmit()}
         />
 
         <label style={{ display: "block", fontFamily: "Inter, sans-serif", fontSize: 12.5, color: C.inkSoft, margin: "16px 0 6px" }}>
-          {role === "hod" ? "Department you head" : "Department"}
+          Password
         </label>
-        <select value={department} onChange={(e) => setDepartment(e.target.value)} style={inputStyle}>
-          {DEPARTMENTS.map((d) => (
-            <option key={d} value={d}>{d}</option>
-          ))}
-        </select>
+        <input
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="********"
+          style={inputStyle}
+          onKeyDown={(e) => e.key === "Enter" && canSubmit && handleSubmit()}
+        />
+
+        {err && (
+          <div style={{ display: "flex", gap: 6, alignItems: "flex-start", color: C.stampRed, fontSize: 12.5, marginTop: 12, fontFamily: "Inter, sans-serif" }}>
+            <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} /> {err}
+          </div>
+        )}
 
         <button
           disabled={!canSubmit}
-          onClick={() => onDone({ role, name: name.trim(), department })}
+          onClick={handleSubmit}
           style={{
             marginTop: 24, width: "100%", padding: "12px 0", borderRadius: 7, border: "none",
             background: canSubmit ? C.ink : C.rule, color: C.paper, fontFamily: "Inter, sans-serif",
             fontWeight: 600, fontSize: 14.5, cursor: canSubmit ? "pointer" : "not-allowed",
+            display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
           }}
         >
-          Enter Ledger
+          {loading && <Loader2 size={15} className="spin" />}
+          {loading ? "Signing in..." : "Sign in"}
         </button>
+
+        <p style={{ fontFamily: "Inter, sans-serif", fontSize: 12, color: C.inkSoft, marginTop: 18, textAlign: "center" }}>
+          Don't have an account? Ask your administrator to create one for you.
+        </p>
       </div>
     </div>
   );
@@ -435,7 +473,7 @@ function NewRequestForm({ profile, requests, onSubmit }) {
               </div>
             </div>
             <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12.5, color: C.inkSoft, marginBottom: 16 }}>
-              {days > 0 ? `${days} day${days > 1 ? "s" : ""} total` : "—"}
+              {days > 0 ? `${days} day${days > 1 ? "s" : ""} total` : "--"}
             </div>
           </>
         ) : (
@@ -460,7 +498,7 @@ function NewRequestForm({ profile, requests, onSubmit }) {
           value={reason}
           onChange={(e) => setReason(e.target.value)}
           rows={3}
-          placeholder="Brief reason for this request…"
+          placeholder="Brief reason for this request..."
           style={{ ...inputStyle, resize: "vertical", marginBottom: 8, fontFamily: "Inter, sans-serif" }}
         />
         {err && (
@@ -513,17 +551,17 @@ function RequestCard({ req, showFaculty, actions }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 8 }}>
         <div>
           <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11.5, color: C.inkSoft, marginBottom: 3 }}>
-            {req.requestNo} · {req.department}
+            {req.requestNo} - {req.department}
           </div>
           {showFaculty && (
             <div style={{ fontFamily: "Lora, serif", fontSize: 16, color: C.ink, fontWeight: 600 }}>{req.facultyName}</div>
           )}
           <div style={{ fontFamily: "Inter, sans-serif", fontSize: 13.5, color: C.ink, marginTop: 2 }}>
             <span style={{ fontWeight: 600, color: catColor }}>{req.leaveCategory}</span>
-            {" · "}
+            {" - "}
             {req.requestType === "Leave"
-              ? `${fmtDate(req.fromDate)} → ${fmtDate(req.toDate)} (${req.days} day${req.days > 1 ? "s" : ""})`
-              : `${fmtDate(req.date)}, ${req.fromTime}–${req.toTime}`}
+              ? `${fmtDate(req.fromDate)} -> ${fmtDate(req.toDate)} (${req.days} day${req.days > 1 ? "s" : ""})`
+              : `${fmtDate(req.date)}, ${req.fromTime}-${req.toTime}`}
           </div>
         </div>
         <StatusStamp status={req.status} />
@@ -550,7 +588,7 @@ function ApprovalActions({ req, onAction }) {
       <input
         value={comment}
         onChange={(e) => setComment(e.target.value)}
-        placeholder="Optional note for the faculty member…"
+        placeholder="Optional note for the faculty member..."
         style={{ ...inputStyle, marginBottom: 8, fontSize: 13 }}
       />
       <div style={{ display: "flex", gap: 8 }}>
@@ -674,7 +712,7 @@ function CalendarView({ requests }) {
             {selectedList.map((r) => (
               <div key={r.id} style={{ borderLeft: `3px solid ${CATEGORY_COLOR[r.leaveCategory]}`, paddingLeft: 10 }}>
                 <div style={{ fontFamily: "Inter, sans-serif", fontSize: 13.5, fontWeight: 600, color: C.ink }}>{r.facultyName}</div>
-                <div style={{ fontFamily: "Inter, sans-serif", fontSize: 12, color: C.inkSoft }}>{r.department} · {r.leaveCategory}</div>
+                <div style={{ fontFamily: "Inter, sans-serif", fontSize: 12, color: C.inkSoft }}>{r.department} - {r.leaveCategory}</div>
               </div>
             ))}
           </div>
@@ -803,7 +841,7 @@ const NAV_HOD = [
 ];
 
 export default function FacultyLeaveTracker() {
-  const [profile, setProfile] = useState(undefined); // undefined = loading, null = needs onboarding
+  const [profile, setProfile] = useState(undefined); // undefined = loading, null = needs login
   const [requests, setRequests] = useState([]);
   const [loadingReq, setLoadingReq] = useState(true);
   const [view, setView] = useState("dashboard");
@@ -823,26 +861,32 @@ export default function FacultyLeaveTracker() {
   }, []);
 
   useEffect(() => {
+    if (profile === undefined) return; // still resolving login state
+    if (!profile) {
+      setRequests([]);
+      setLoadingReq(false);
+      return;
+    }
     (async () => {
       setLoadingReq(true);
       try {
-        const r = await fetchAllRequests();
+        const r = await fetchAllRequests(profile.accessToken);
         setRequests(r);
       } catch {
-        showToast("Couldn't load data from the database — check your connection.", "error");
+        showToast("Couldn't load data from the database -- check your connection.", "error");
       }
       setLoadingReq(false);
     })();
-  }, [showToast]);
+  }, [profile, showToast]);
 
-  async function handleOnboard(p) {
+  async function handleLoginSuccess(p) {
     setProfile(p);
     await persistProfile(p);
   }
 
   async function handleSubmitRequest(record) {
     try {
-      const inserted = await insertRequestDb(record);
+      const inserted = await insertRequestDb(record, profile.accessToken);
       setRequests((prev) => [inserted, ...prev]);
       showToast(`Filed ${inserted.requestNo}`, "ok");
     } catch (e) {
@@ -853,7 +897,7 @@ export default function FacultyLeaveTracker() {
 
   async function handleAction(id, status, comment) {
     try {
-      const updated = await updateRequestDb(id, status, comment);
+      const updated = await updateRequestDb(id, status, comment, profile.accessToken);
       setRequests((prev) => prev.map((r) => (r.id === id ? updated : r)));
       showToast(`Marked ${status.toLowerCase()}`, "ok");
     } catch (e) {
@@ -861,7 +905,8 @@ export default function FacultyLeaveTracker() {
     }
   }
 
-  function handleSignOut() {
+  async function handleSignOut() {
+    await clearProfile();
     setProfile(null);
   }
 
@@ -873,7 +918,7 @@ export default function FacultyLeaveTracker() {
       </div>
     );
   }
-  if (!profile) return <Onboarding onDone={handleOnboard} />;
+  if (!profile) return <Login onDone={handleLoginSuccess} />;
 
   const isFaculty = profile.role === "faculty";
   const nav = isFaculty ? NAV_FACULTY : NAV_HOD;
@@ -909,7 +954,7 @@ export default function FacultyLeaveTracker() {
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <div style={{ textAlign: "right" }}>
             <div style={{ fontSize: 13, fontWeight: 600 }}>{profile.name}</div>
-            <div style={{ fontSize: 11, color: C.inkSoft }}>{isFaculty ? "Faculty" : "HOD"} · {profile.department}</div>
+            <div style={{ fontSize: 11, color: C.inkSoft }}>{isFaculty ? "Faculty" : "HOD"} - {profile.department}</div>
           </div>
           <button onClick={handleSignOut} style={iconBtnStyle} title="Sign out"><LogOut size={15} /></button>
         </div>
@@ -1009,7 +1054,7 @@ function DashboardView({ isFaculty, profile, myRequests, onGoNew }) {
   return (
     <div>
       <SectionHeading
-        eyebrow={isFaculty ? "Overview" : `${profile.department} · Overview`}
+        eyebrow={isFaculty ? "Overview" : `${profile.department} - Overview`}
         title={isFaculty ? `Welcome back, ${profile.name.split(" ")[0]}` : "Department overview"}
         right={
           <button onClick={onGoNew} style={{ ...primaryBtnStyle, display: "flex", alignItems: "center", gap: 6 }}>
