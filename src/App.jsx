@@ -320,11 +320,17 @@ function Login({ onDone }) {
     <div style={{ minHeight: "100vh", background: C.paper, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
       <style>{FONT_IMPORT}</style>
       <div style={{ width: "100%", maxWidth: 420, background: C.card, border: `1px solid ${C.rule}`, borderRadius: 12, padding: "36px 32px", boxShadow: "0 20px 50px rgba(27,42,74,0.12)" }}>
-        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: "0.18em", color: C.brassDeep, textTransform: "uppercase", marginBottom: 6 }}>
-          Sign In
+        <div style={{ textAlign: "center", marginBottom: 20 }}>
+          <img src="/logo.png" alt="College logo" style={{ width: 92, height: 92, objectFit: "contain", margin: "0 auto 14px" }} />
+          <div style={{ fontFamily: "Lora, serif", fontWeight: 700, fontSize: 17, color: C.ink, lineHeight: 1.3, textTransform: "uppercase", letterSpacing: "0.02em", marginBottom: 16 }}>
+            Dwarka Doss Goverdhan Doss<br />Vaishnav College
+          </div>
+          <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: "0.18em", color: C.brassDeep, textTransform: "uppercase", marginBottom: 6 }}>
+            Sign In
+          </div>
+          <h1 style={{ fontFamily: "Lora, serif", fontSize: 22, color: C.ink, margin: 0 }}>Faculty Leave Ledger</h1>
         </div>
-        <h1 style={{ fontFamily: "Lora, serif", fontSize: 26, color: C.ink, margin: "0 0 6px" }}>Faculty Leave Ledger</h1>
-        <p style={{ fontFamily: "Inter, sans-serif", fontSize: 13.5, color: C.inkSoft, margin: "0 0 24px" }}>
+        <p style={{ fontFamily: "Inter, sans-serif", fontSize: 13.5, color: C.inkSoft, margin: "0 0 24px", textAlign: "center" }}>
           Sign in with the email and password given to you by your administrator.
         </p>
 
@@ -949,6 +955,7 @@ export default function FacultyLeaveTracker() {
           <button onClick={() => setNavOpen((v) => !v)} style={{ ...iconBtnStyle, display: "none" }} className="hamburger">
             <Menu size={16} />
           </button>
+          <img src="/logo.png" alt="College logo" style={{ width: 30, height: 30, objectFit: "contain" }} />
           <div style={{ fontFamily: "Lora, serif", fontWeight: 700, fontSize: 18 }}>Faculty Leave Ledger</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
