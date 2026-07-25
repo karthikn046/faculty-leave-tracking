@@ -206,7 +206,24 @@ async function insertNotificationDb(payload, token) {
     throw new Error(`Notification insert failed (${res.status}): ${detail}`);
   }
   const rows = await res.json();
-  return notifFromDb(rows[0]);
+  const notif = notifFromDb(rows[0]);
+
+  // Fire the email directly -- best-effort, never blocks the UI on failure.
+  fetch(`${SUPABASE_URL}/functions/v1/send-notification-email`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify({
+      record: {
+        target_role: payload.targetRole,
+        department: payload.department,
+        recipient_email: payload.recipientEmail || null,
+        title: payload.title,
+        body: payload.body || null,
+      },
+    }),
+  }).catch(() => {});
+
+  return notif;
 }
 async function markNotificationsReadDb(ids, token) {
   if (!ids.length) return;
