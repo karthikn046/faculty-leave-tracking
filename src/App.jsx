@@ -3,7 +3,7 @@ import {
   LayoutDashboard, FilePlus2, CheckSquare, CalendarDays, BarChart3,
   LogOut, ChevronLeft, ChevronRight, Clock, User, Building2, X, Check,
   AlertCircle, Download, Filter, Menu, Users, TrendingUp, ClipboardList,
-  Loader2, Inbox
+  Loader2, Inbox, Bell
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -83,6 +83,7 @@ function fromDb(row) {
     id: row.id,
     requestNo: row.request_no,
     facultyName: row.faculty_name,
+    facultyEmail: row.faculty_email,
     department: row.department,
     requestType: row.request_type,
     leaveCategory: row.leave_category,
@@ -104,6 +105,7 @@ function toDbInsert(record) {
   return {
     request_no: record.requestNo,
     faculty_name: record.facultyName,
+    faculty_email: record.facultyEmail || null,
     department: record.department,
     request_type: record.requestType,
     leave_category: record.leaveCategory,
@@ -153,6 +155,68 @@ async function updateRequestDb(id, status, hodComment, token) {
   const rows = await res.json();
   return fromDb(rows[0]);
 }
+
+/* ---------------------------------------------------------------------- */
+/*  Notifications                                                          */
+/* ---------------------------------------------------------------------- */
+
+function notifFromDb(row) {
+  return {
+    id: row.id,
+    targetRole: row.target_role,
+    department: row.department,
+    recipientEmail: row.recipient_email,
+    title: row.title,
+    body: row.body,
+    requestId: row.request_id,
+    isRead: row.is_read,
+    createdAt: row.created_at,
+  };
+}
+async function fetchNotifications(profile, token) {
+  const q =
+    profile.role === "hod"
+      ? `target_role=eq.hod&department=eq.${encodeURIComponent(profile.department)}`
+      : `target_role=eq.faculty&recipient_email=eq.${encodeURIComponent(profile.email)}`;
+  const res = await fetch(`${REST}/notifications?${q}&select=*&order=created_at.desc&limit=30`, {
+    headers: authHeaders(token),
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`Fetch notifications failed (${res.status}): ${detail}`);
+  }
+  const rows = await res.json();
+  return rows.map(notifFromDb);
+}
+async function insertNotificationDb(payload, token) {
+  const res = await fetch(`${REST}/notifications`, {
+    method: "POST",
+    headers: { ...authHeaders(token), Prefer: "return=representation" },
+    body: JSON.stringify({
+      target_role: payload.targetRole,
+      department: payload.department,
+      recipient_email: payload.recipientEmail || null,
+      title: payload.title,
+      body: payload.body || null,
+      request_id: payload.requestId || null,
+    }),
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`Notification insert failed (${res.status}): ${detail}`);
+  }
+  const rows = await res.json();
+  return notifFromDb(rows[0]);
+}
+async function markNotificationsReadDb(ids, token) {
+  if (!ids.length) return;
+  await fetch(`${REST}/notifications?id=in.(${ids.join(",")})`, {
+    method: "PATCH",
+    headers: authHeaders(token),
+    body: JSON.stringify({ is_read: true }),
+  });
+}
+
 
 /* ---------------------------------------------------------------------- */
 /*  Local profile memory (device-only, not shared)                         */
@@ -307,6 +371,7 @@ function Login({ onDone }) {
         role: meta.role,
         name: meta.name || data.user.email,
         department: meta.department,
+        email: data.user.email,
         accessToken: data.access_token,
         refreshToken: data.refresh_token,
       });
@@ -393,6 +458,77 @@ const inputStyle = {
 };
 
 /* ---------------------------------------------------------------------- */
+/*  Notification bell                                                      */
+/* ---------------------------------------------------------------------- */
+
+function timeAgo(iso) {
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days}d ago`;
+}
+
+function NotificationBell({ notifications, onMarkRead }) {
+  const [open, setOpen] = useState(false);
+  const unread = notifications.filter((n) => !n.isRead);
+
+  function handleToggle() {
+    setOpen((v) => !v);
+    if (!open && unread.length > 0) {
+      onMarkRead(unread.map((n) => n.id));
+    }
+  }
+
+  return (
+    <div style={{ position: "relative" }}>
+      <button onClick={handleToggle} style={{ ...iconBtnStyle, position: "relative" }} title="Notifications">
+        <Bell size={15} />
+        {unread.length > 0 && (
+          <span style={{
+            position: "absolute", top: -4, right: -4, background: C.stampRed, color: "#fff",
+            borderRadius: 10, minWidth: 16, height: 16, fontSize: 10, fontWeight: 700,
+            display: "flex", alignItems: "center", justifyContent: "center", padding: "0 3px",
+          }}>
+            {unread.length}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div style={{
+          position: "absolute", right: 0, top: 38, width: 300, maxHeight: 380, overflowY: "auto",
+          background: C.card, border: `1px solid ${C.rule}`, borderRadius: 10, boxShadow: "0 12px 32px rgba(27,42,74,0.18)",
+          zIndex: 60, padding: 8,
+        }}>
+          <div style={{ fontFamily: "Inter, sans-serif", fontSize: 12, color: C.inkSoft, padding: "6px 8px", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+            Notifications
+          </div>
+          {notifications.length === 0 ? (
+            <div style={{ padding: "20px 8px", textAlign: "center", fontFamily: "Inter, sans-serif", fontSize: 13, color: C.inkSoft }}>
+              Nothing yet.
+            </div>
+          ) : (
+            notifications.map((n) => (
+              <div key={n.id} style={{
+                padding: "10px 8px", borderRadius: 6, marginBottom: 2,
+                background: n.isRead ? "transparent" : "rgba(166,129,62,0.08)",
+              }}>
+                <div style={{ fontFamily: "Inter, sans-serif", fontSize: 13, fontWeight: 600, color: C.ink }}>{n.title}</div>
+                {n.body && <div style={{ fontFamily: "Inter, sans-serif", fontSize: 12.5, color: C.inkSoft, marginTop: 2 }}>{n.body}</div>}
+                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10.5, color: C.inkSoft, marginTop: 4 }}>{timeAgo(n.createdAt)}</div>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------- */
 /*  New Request form                                                       */
 /* ---------------------------------------------------------------------- */
 
@@ -423,6 +559,7 @@ function NewRequestForm({ profile, requests, onSubmit }) {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       requestNo: nextRequestNo(requests),
       facultyName: profile.name,
+      facultyEmail: profile.email,
       department: profile.department,
       requestType: type,
       reason: reason.trim(),
@@ -853,6 +990,7 @@ export default function FacultyLeaveTracker() {
   const [view, setView] = useState("dashboard");
   const [toast, setToast] = useState(null);
   const [navOpen, setNavOpen] = useState(false);
+  const [notifications, setNotifications] = useState([]);
 
   const showToast = useCallback((message, type = "ok") => {
     setToast({ message, type });
@@ -870,6 +1008,7 @@ export default function FacultyLeaveTracker() {
     if (profile === undefined) return; // still resolving login state
     if (!profile) {
       setRequests([]);
+      setNotifications([]);
       setLoadingReq(false);
       return;
     }
@@ -882,6 +1021,12 @@ export default function FacultyLeaveTracker() {
         showToast("Couldn't load data from the database -- check your connection.", "error");
       }
       setLoadingReq(false);
+      try {
+        const n = await fetchNotifications(profile, profile.accessToken);
+        setNotifications(n);
+      } catch {
+        /* non-fatal, notifications are best-effort */
+      }
     })();
   }, [profile, showToast]);
 
@@ -895,6 +1040,16 @@ export default function FacultyLeaveTracker() {
       const inserted = await insertRequestDb(record, profile.accessToken);
       setRequests((prev) => [inserted, ...prev]);
       showToast(`Filed ${inserted.requestNo}`, "ok");
+      insertNotificationDb(
+        {
+          targetRole: "hod",
+          department: profile.department,
+          title: `New request from ${profile.name}`,
+          body: `${inserted.leaveCategory} -- ${inserted.reason}`,
+          requestId: inserted.id,
+        },
+        profile.accessToken
+      ).catch(() => {});
     } catch (e) {
       showToast(e.message || "Couldn't save to the database.", "error");
     }
@@ -906,9 +1061,27 @@ export default function FacultyLeaveTracker() {
       const updated = await updateRequestDb(id, status, comment, profile.accessToken);
       setRequests((prev) => prev.map((r) => (r.id === id ? updated : r)));
       showToast(`Marked ${status.toLowerCase()}`, "ok");
+      if (updated.facultyEmail) {
+        insertNotificationDb(
+          {
+            targetRole: "faculty",
+            department: profile.department,
+            recipientEmail: updated.facultyEmail,
+            title: `Your request was ${status.toLowerCase()}`,
+            body: comment || `${updated.leaveCategory} -- ${updated.requestNo}`,
+            requestId: updated.id,
+          },
+          profile.accessToken
+        ).catch(() => {});
+      }
     } catch (e) {
       showToast(e.message || "Update failed to sync.", "error");
     }
+  }
+
+  async function handleMarkNotificationsRead(ids) {
+    setNotifications((prev) => prev.map((n) => (ids.includes(n.id) ? { ...n, isRead: true } : n)));
+    markNotificationsReadDb(ids, profile.accessToken).catch(() => {});
   }
 
   async function handleSignOut() {
@@ -963,6 +1136,7 @@ export default function FacultyLeaveTracker() {
             <div style={{ fontSize: 13, fontWeight: 600 }}>{profile.name}</div>
             <div style={{ fontSize: 11, color: C.inkSoft }}>{isFaculty ? "Faculty" : "HOD"} - {profile.department}</div>
           </div>
+          <NotificationBell notifications={notifications} onMarkRead={handleMarkNotificationsRead} />
           <button onClick={handleSignOut} style={iconBtnStyle} title="Sign out"><LogOut size={15} /></button>
         </div>
       </div>
