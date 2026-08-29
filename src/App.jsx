@@ -549,18 +549,60 @@ function NotificationBell({ notifications, onMarkRead }) {
 /*  New Request form                                                       */
 /* ---------------------------------------------------------------------- */
 
+const ANNUAL_LEAVE_LIMIT = 12;
+const MONTHLY_PERMISSION_LIMIT = 2;
+const CAPPED_CATEGORIES = ["Casual Leave", "Sick Leave"]; // count toward the 12-day limit
+const PERMISSION_SLOTS = [
+  { key: "before", label: "Before Break", from: "14:00", to: "16:30", sub: "2:00 - 4:30 PM" },
+  { key: "after", label: "After Break", from: "16:30", to: "18:30", sub: "4:30 - 6:30 PM" },
+];
+
+function myRequestsFor(requests, profile) {
+  return requests.filter((r) => r.facultyName === profile.name && r.department === profile.department);
+}
+function leaveDaysUsedThisYear(requests, profile) {
+  const year = new Date().getFullYear();
+  return myRequestsFor(requests, profile)
+    .filter(
+      (r) =>
+        r.requestType === "Leave" &&
+        CAPPED_CATEGORIES.includes(r.leaveCategory) &&
+        r.status !== "Rejected" &&
+        new Date(r.appliedOn).getFullYear() === year
+    )
+    .reduce((sum, r) => sum + (r.days || 0), 0);
+}
+function permissionsUsedThisMonth(requests, profile) {
+  const now = new Date();
+  return myRequestsFor(requests, profile).filter(
+    (r) =>
+      r.requestType === "Permission" &&
+      r.status !== "Rejected" &&
+      new Date(r.appliedOn).getFullYear() === now.getFullYear() &&
+      new Date(r.appliedOn).getMonth() === now.getMonth()
+  ).length;
+}
+
 function NewRequestForm({ profile, requests, onSubmit }) {
   const [type, setType] = useState("Leave");
   const [category, setCategory] = useState(LEAVE_CATEGORIES[0]);
   const [fromDate, setFromDate] = useState(isoToday());
   const [toDate, setToDate] = useState(isoToday());
   const [permDate, setPermDate] = useState(isoToday());
-  const [fromTime, setFromTime] = useState("10:00");
-  const [toTime, setToTime] = useState("12:00");
+  const [permSlot, setPermSlot] = useState("before");
   const [reason, setReason] = useState("");
   const [err, setErr] = useState("");
 
   const days = type === "Leave" ? daysBetween(fromDate, toDate) : null;
+
+  const leaveUsed = leaveDaysUsedThisYear(requests, profile);
+  const leaveRemaining = Math.max(0, ANNUAL_LEAVE_LIMIT - leaveUsed);
+  const permsUsed = permissionsUsedThisMonth(requests, profile);
+  const permsRemaining = Math.max(0, MONTHLY_PERMISSION_LIMIT - permsUsed);
+
+  const isCappedCategory = CAPPED_CATEGORIES.includes(category);
+  const willExceedLeave = type === "Leave" && isCappedCategory && days > leaveRemaining;
+  const permissionsExhausted = type === "Permission" && permsRemaining <= 0;
 
   function handleSubmit() {
     setErr("");
@@ -572,6 +614,11 @@ function NewRequestForm({ profile, requests, onSubmit }) {
       setErr("End date can't be before the start date.");
       return;
     }
+    if (permissionsExhausted) {
+      setErr(`You've already used both permissions available this month (${MONTHLY_PERMISSION_LIMIT} max).`);
+      return;
+    }
+    const finalReason = willExceedLeave ? `[Loss of Pay] ${reason.trim()}` : reason.trim();
     const base = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       requestNo: nextRequestNo(requests),
@@ -579,16 +626,17 @@ function NewRequestForm({ profile, requests, onSubmit }) {
       facultyEmail: profile.email,
       department: profile.department,
       requestType: type,
-      reason: reason.trim(),
+      reason: finalReason,
       status: "Pending",
       appliedOn: new Date().toISOString(),
       actionedOn: null,
       hodComment: "",
     };
+    const slot = PERMISSION_SLOTS.find((s) => s.key === permSlot);
     const record =
       type === "Leave"
         ? { ...base, leaveCategory: category, fromDate, toDate, days: daysBetween(fromDate, toDate) }
-        : { ...base, leaveCategory: "Permission", date: permDate, fromTime, toTime };
+        : { ...base, leaveCategory: "Permission", date: permDate, fromTime: slot.from, toTime: slot.to };
     onSubmit(record);
     setReason("");
   }
@@ -596,6 +644,12 @@ function NewRequestForm({ profile, requests, onSubmit }) {
   return (
     <div style={{ maxWidth: 560 }}>
       <SectionHeading eyebrow="New Entry" title="File a leave or permission request" />
+
+      <div style={{ display: "flex", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
+        <StatCard label="Leave days left (of 12)" value={leaveRemaining} accent={leaveRemaining > 0 ? C.stampGreen : C.stampRed} />
+        <StatCard label="Permissions left this month" value={permsRemaining} accent={permsRemaining > 0 ? C.stampGreen : C.stampRed} />
+      </div>
+
       <div style={cardStyle}>
         <FieldLabel>Request type</FieldLabel>
         <div style={{ display: "flex", gap: 8, marginBottom: 18 }}>
@@ -635,21 +689,56 @@ function NewRequestForm({ profile, requests, onSubmit }) {
             <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12.5, color: C.inkSoft, marginBottom: 16 }}>
               {days > 0 ? `${days} day${days > 1 ? "s" : ""} total` : "--"}
             </div>
+            {willExceedLeave && (
+              <div style={{
+                display: "flex", gap: 8, alignItems: "flex-start", background: "rgba(162,59,46,0.08)",
+                border: `1px solid ${C.stampRed}`, borderRadius: 6, padding: "10px 12px", marginBottom: 16,
+              }}>
+                <AlertCircle size={15} color={C.stampRed} style={{ flexShrink: 0, marginTop: 1 }} />
+                <div style={{ fontFamily: "Inter, sans-serif", fontSize: 12.5, color: C.stampRed }}>
+                  This exceeds your remaining {leaveRemaining} day{leaveRemaining === 1 ? "" : "s"} of leave for the year.
+                  It will be marked <strong>Loss of Pay</strong> and flagged for your HOD. If you'd rather not take a pay
+                  cut, consider applying under <strong>Earned Leave</strong> instead, if you have it available.
+                </div>
+              </div>
+            )}
           </>
         ) : (
           <>
             <FieldLabel>Date</FieldLabel>
             <input type="date" value={permDate} onChange={(e) => setPermDate(e.target.value)} style={{ ...inputStyle, marginBottom: 16 }} />
-            <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
-              <div style={{ flex: 1 }}>
-                <FieldLabel>From time</FieldLabel>
-                <input type="time" value={fromTime} onChange={(e) => setFromTime(e.target.value)} style={inputStyle} />
-              </div>
-              <div style={{ flex: 1 }}>
-                <FieldLabel>To time</FieldLabel>
-                <input type="time" value={toTime} onChange={(e) => setToTime(e.target.value)} style={inputStyle} />
-              </div>
+            <FieldLabel>Time slot</FieldLabel>
+            <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+              {PERMISSION_SLOTS.map((s) => (
+                <button
+                  key={s.key}
+                  onClick={() => setPermSlot(s.key)}
+                  style={{
+                    flex: 1, padding: "10px 8px", borderRadius: 6, cursor: "pointer", textAlign: "left",
+                    border: `1.5px solid ${permSlot === s.key ? C.brass : C.rule}`,
+                    background: permSlot === s.key ? "rgba(166,129,62,0.12)" : "transparent",
+                  }}
+                >
+                  <div style={{ fontFamily: "Inter, sans-serif", fontWeight: 600, fontSize: 13, color: permSlot === s.key ? C.brassDeep : C.ink }}>
+                    {s.label}
+                  </div>
+                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: C.inkSoft, marginTop: 2 }}>
+                    {s.sub}
+                  </div>
+                </button>
+              ))}
             </div>
+            {permissionsExhausted && (
+              <div style={{
+                display: "flex", gap: 8, alignItems: "flex-start", background: "rgba(162,59,46,0.08)",
+                border: `1px solid ${C.stampRed}`, borderRadius: 6, padding: "10px 12px", marginBottom: 16,
+              }}>
+                <AlertCircle size={15} color={C.stampRed} style={{ flexShrink: 0, marginTop: 1 }} />
+                <div style={{ fontFamily: "Inter, sans-serif", fontSize: 12.5, color: C.stampRed }}>
+                  You've already used both permissions allowed this month. Consider applying for a short leave instead.
+                </div>
+              </div>
+            )}
           </>
         )}
 
@@ -666,7 +755,11 @@ function NewRequestForm({ profile, requests, onSubmit }) {
             <AlertCircle size={14} /> {err}
           </div>
         )}
-        <button onClick={handleSubmit} style={primaryBtnStyle}>
+        <button
+          onClick={handleSubmit}
+          disabled={permissionsExhausted}
+          style={{ ...primaryBtnStyle, opacity: permissionsExhausted ? 0.5 : 1, cursor: permissionsExhausted ? "not-allowed" : "pointer" }}
+        >
           Submit request
         </button>
       </div>
