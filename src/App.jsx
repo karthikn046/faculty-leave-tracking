@@ -234,6 +234,95 @@ async function markNotificationsReadDb(ids, token) {
   });
 }
 
+/* ---------------------------------------------------------------------- */
+/*  Substitute (cover) requests                                            */
+/* ---------------------------------------------------------------------- */
+
+function subFromDb(row) {
+  return {
+    id: row.id,
+    requestId: row.request_id,
+    department: row.department,
+    facultyName: row.faculty_name,
+    facultyEmail: row.faculty_email,
+    substituteName: row.substitute_name,
+    substituteEmail: row.substitute_email,
+    status: row.status,
+    createdAt: row.created_at,
+    respondedAt: row.responded_at,
+  };
+}
+async function fetchSubstituteRequests(profile, token) {
+  // Requests sent TO me (as a possible substitute) and ones I originated
+  const res = await fetch(
+    `${REST}/substitute_requests?or=(substitute_email.eq.${encodeURIComponent(profile.email)},faculty_email.eq.${encodeURIComponent(profile.email)})&select=*&order=created_at.desc`,
+    { headers: authHeaders(token) }
+  );
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`Fetch cover requests failed (${res.status}): ${detail}`);
+  }
+  const rows = await res.json();
+  return rows.map(subFromDb);
+}
+async function insertSubstituteRequestDb(payload, token) {
+  const res = await fetch(`${REST}/substitute_requests`, {
+    method: "POST",
+    headers: { ...authHeaders(token), Prefer: "return=representation" },
+    body: JSON.stringify({
+      request_id: payload.requestId || null,
+      department: payload.department,
+      faculty_name: payload.facultyName,
+      faculty_email: payload.facultyEmail,
+      substitute_name: payload.substituteName,
+      substitute_email: payload.substituteEmail,
+    }),
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`Cover request insert failed (${res.status}): ${detail}`);
+  }
+  const rows = await res.json();
+  return subFromDb(rows[0]);
+}
+async function respondSubstituteRequestDb(id, status, token) {
+  const res = await fetch(`${REST}/substitute_requests?id=eq.${id}`, {
+    method: "PATCH",
+    headers: { ...authHeaders(token), Prefer: "return=representation" },
+    body: JSON.stringify({ status, responded_at: new Date().toISOString() }),
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`Cover response failed (${res.status}): ${detail}`);
+  }
+  const rows = await res.json();
+  return subFromDb(rows[0]);
+}
+
+/* ---------------------------------------------------------------------- */
+/*  Timetable                                                              */
+/* ---------------------------------------------------------------------- */
+
+const TIMETABLE_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const TIMETABLE_PERIODS = [1, 2, 3, 4, 5];
+
+async function fetchTimetable(facultyEmail, token) {
+  const res = await fetch(
+    `${REST}/timetables?faculty_email=eq.${encodeURIComponent(facultyEmail)}&select=*`,
+    { headers: authHeaders(token) }
+  );
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`Fetch timetable failed (${res.status}): ${detail}`);
+  }
+  const rows = await res.json();
+  const grid = {};
+  rows.forEach((r) => {
+    grid[`${r.day}-${r.period}`] = r.class_name;
+  });
+  return grid;
+}
+
 
 /* ---------------------------------------------------------------------- */
 /*  Local profile memory (device-only, not shared)                         */
@@ -591,6 +680,8 @@ function NewRequestForm({ profile, requests, onSubmit }) {
   const [permDate, setPermDate] = useState(isoToday());
   const [permSlot, setPermSlot] = useState("before");
   const [reason, setReason] = useState("");
+  const [subName, setSubName] = useState("");
+  const [subEmail, setSubEmail] = useState("");
   const [err, setErr] = useState("");
 
   const days = type === "Leave" ? daysBetween(fromDate, toDate) : null;
@@ -635,10 +726,20 @@ function NewRequestForm({ profile, requests, onSubmit }) {
     const slot = PERMISSION_SLOTS.find((s) => s.key === permSlot);
     const record =
       type === "Leave"
-        ? { ...base, leaveCategory: category, fromDate, toDate, days: daysBetween(fromDate, toDate) }
+        ? {
+            ...base,
+            leaveCategory: category,
+            fromDate,
+            toDate,
+            days: daysBetween(fromDate, toDate),
+            substituteName: subName.trim(),
+            substituteEmail: subEmail.trim(),
+          }
         : { ...base, leaveCategory: "Permission", date: permDate, fromTime: slot.from, toTime: slot.to };
     onSubmit(record);
     setReason("");
+    setSubName("");
+    setSubEmail("");
   }
 
   return (
@@ -702,6 +803,30 @@ function NewRequestForm({ profile, requests, onSubmit }) {
                 </div>
               </div>
             )}
+
+            <FieldLabel>Assign a substitute (optional)</FieldLabel>
+            <div style={{ display: "flex", gap: 12, marginBottom: 8 }}>
+              <div style={{ flex: 1 }}>
+                <input
+                  value={subName}
+                  onChange={(e) => setSubName(e.target.value)}
+                  placeholder="Substitute's name"
+                  style={inputStyle}
+                />
+              </div>
+              <div style={{ flex: 1 }}>
+                <input
+                  type="email"
+                  value={subEmail}
+                  onChange={(e) => setSubEmail(e.target.value)}
+                  placeholder="Substitute's email"
+                  style={inputStyle}
+                />
+              </div>
+            </div>
+            <div style={{ fontFamily: "Inter, sans-serif", fontSize: 12, color: C.inkSoft, marginBottom: 16 }}>
+              They'll be notified to cover your classes and can accept or decline.
+            </div>
           </>
         ) : (
           <>
@@ -1083,12 +1208,15 @@ function ReportsView({ requests, scopeLabel }) {
 const NAV_FACULTY = [
   { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { key: "new", label: "New Request", icon: FilePlus2 },
+  { key: "covers", label: "Cover Requests", icon: Users },
+  { key: "timetable", label: "Timetable", icon: Clock },
   { key: "calendar", label: "Calendar", icon: CalendarDays },
   { key: "reports", label: "My Reports", icon: BarChart3 },
 ];
 const NAV_HOD = [
   { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { key: "approvals", label: "Approvals", icon: CheckSquare },
+  { key: "timetable", label: "Timetable", icon: Clock },
   { key: "calendar", label: "Calendar", icon: CalendarDays },
   { key: "reports", label: "Reports", icon: BarChart3 },
 ];
@@ -1101,6 +1229,7 @@ export default function FacultyLeaveTracker() {
   const [toast, setToast] = useState(null);
   const [navOpen, setNavOpen] = useState(false);
   const [notifications, setNotifications] = useState([]);
+  const [subRequests, setSubRequests] = useState([]);
 
   const showToast = useCallback((message, type = "ok") => {
     setToast({ message, type });
@@ -1119,6 +1248,7 @@ export default function FacultyLeaveTracker() {
     if (!profile) {
       setRequests([]);
       setNotifications([]);
+      setSubRequests([]);
       setLoadingReq(false);
       return;
     }
@@ -1136,6 +1266,12 @@ export default function FacultyLeaveTracker() {
         setNotifications(n);
       } catch {
         /* non-fatal, notifications are best-effort */
+      }
+      try {
+        const s = await fetchSubstituteRequests(profile, profile.accessToken);
+        setSubRequests(s);
+      } catch {
+        /* non-fatal */
       }
     })();
   }, [profile, showToast]);
@@ -1160,10 +1296,62 @@ export default function FacultyLeaveTracker() {
         },
         profile.accessToken
       ).catch(() => {});
+
+      if (record.substituteName && record.substituteEmail) {
+        insertSubstituteRequestDb(
+          {
+            requestId: inserted.id,
+            department: profile.department,
+            facultyName: profile.name,
+            facultyEmail: profile.email,
+            substituteName: record.substituteName,
+            substituteEmail: record.substituteEmail,
+          },
+          profile.accessToken
+        )
+          .then((sub) => {
+            setSubRequests((prev) => [sub, ...prev]);
+            insertNotificationDb(
+              {
+                targetRole: "faculty",
+                department: profile.department,
+                recipientEmail: record.substituteEmail,
+                title: `${profile.name} needs a class covered`,
+                body: `${inserted.leaveCategory} on ${fmtDate(inserted.fromDate)}${inserted.toDate !== inserted.fromDate ? ` - ${fmtDate(inserted.toDate)}` : ""}. Open the app to accept or decline.`,
+                requestId: inserted.id,
+              },
+              profile.accessToken
+            ).catch(() => {});
+          })
+          .catch(() => {});
+      }
     } catch (e) {
       showToast(e.message || "Couldn't save to the database.", "error");
     }
     setView("dashboard");
+  }
+
+  async function handleSubstituteResponse(id, status) {
+    try {
+      const updated = await respondSubstituteRequestDb(id, status, profile.accessToken);
+      setSubRequests((prev) => prev.map((s) => (s.id === id ? updated : s)));
+      showToast(`Marked ${status.toLowerCase()}`, "ok");
+      insertNotificationDb(
+        {
+          targetRole: "faculty",
+          department: profile.department,
+          recipientEmail: updated.facultyEmail,
+          title: `${profile.name} ${status.toLowerCase()} your cover request`,
+          body: status === "Accepted"
+            ? `${profile.name} will cover your classes.`
+            : `${profile.name} can't cover your classes -- you may want to find another substitute.`,
+          requestId: updated.requestId,
+        },
+        profile.accessToken
+      ).catch(() => {});
+    } catch (e) {
+      showToast(e.message || "Couldn't update cover request.", "error");
+    }
   }
 
   async function handleAction(id, status, comment) {
@@ -1217,6 +1405,7 @@ export default function FacultyLeaveTracker() {
     : requests.filter((r) => r.department === profile.department);
 
   const pendingForHod = !isFaculty ? myRequests.filter((r) => r.status === "Pending") : [];
+  const pendingCoversForMe = subRequests.filter((s) => s.substituteEmail === profile.email && s.status === "Pending");
 
   return (
     <div style={{ minHeight: "100vh", background: C.paper, fontFamily: "Inter, sans-serif", color: C.ink }}>
@@ -1272,6 +1461,11 @@ export default function FacultyLeaveTracker() {
                   {pendingForHod.length}
                 </span>
               )}
+              {key === "covers" && pendingCoversForMe.length > 0 && (
+                <span style={{ marginLeft: "auto", background: C.stampAmber, color: "#fff", borderRadius: 10, padding: "1px 7px", fontSize: 10.5 }}>
+                  {pendingCoversForMe.length}
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -1292,6 +1486,10 @@ export default function FacultyLeaveTracker() {
           {view === "approvals" && !isFaculty && (
             <ApprovalsView pending={pendingForHod} onAction={handleAction} history={myRequests.filter((r) => r.status !== "Pending")} />
           )}
+          {view === "covers" && isFaculty && (
+            <CoverRequestsView profile={profile} subRequests={subRequests} onRespond={handleSubstituteResponse} />
+          )}
+          {view === "timetable" && <TimetableView profile={profile} token={profile.accessToken} />}
           {view === "calendar" && <CalendarView requests={isFaculty ? requests : myRequests} />}
           {view === "reports" && (
             <ReportsView requests={myRequests} scopeLabel={isFaculty ? "Your record" : `${profile.department} record`} />
@@ -1385,7 +1583,164 @@ function DashboardView({ isFaculty, profile, myRequests, onGoNew }) {
 /*  Approvals view (HOD)                                                   */
 /* ---------------------------------------------------------------------- */
 
-function ApprovalsView({ pending, onAction, history }) {
+/* ---------------------------------------------------------------------- */
+/*  Cover requests view (Faculty)                                          */
+/* ---------------------------------------------------------------------- */
+
+function CoverRequestsView({ profile, subRequests, onRespond }) {
+  const toMe = subRequests.filter((s) => s.substituteEmail === profile.email);
+  const fromMe = subRequests.filter((s) => s.facultyEmail === profile.email);
+  const pendingToMe = toMe.filter((s) => s.status === "Pending");
+  const decidedToMe = toMe.filter((s) => s.status !== "Pending");
+
+  return (
+    <div>
+      <SectionHeading eyebrow="Coverage" title="Cover Requests" />
+
+      <div style={{ fontFamily: "Inter, sans-serif", fontSize: 12.5, color: C.inkSoft, marginBottom: 10, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+        Waiting on your response
+      </div>
+      {pendingToMe.length === 0 ? (
+        <EmptyState icon={Users} title="Nothing pending" sub="No one has asked you to cover their classes right now." />
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 28 }}>
+          {pendingToMe.map((s) => (
+            <div key={s.id} style={{ ...cardStyle, padding: 16 }}>
+              <div style={{ fontFamily: "Lora, serif", fontSize: 15.5, color: C.ink, fontWeight: 600, marginBottom: 4 }}>
+                {s.facultyName} needs coverage
+              </div>
+              <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11.5, color: C.inkSoft, marginBottom: 12 }}>
+                Requested {timeAgo(s.createdAt)}
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  onClick={() => onRespond(s.id, "Accepted")}
+                  style={{ ...primaryBtnStyle, background: C.stampGreen, flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
+                >
+                  <Check size={15} /> Accept
+                </button>
+                <button
+                  onClick={() => onRespond(s.id, "Declined")}
+                  style={{ ...primaryBtnStyle, background: "transparent", color: C.stampRed, border: `1.5px solid ${C.stampRed}`, flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
+                >
+                  <X size={15} /> Decline
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{ fontFamily: "Inter, sans-serif", fontSize: 12.5, color: C.inkSoft, marginBottom: 10, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+        Requests you've sent
+      </div>
+      {fromMe.length === 0 ? (
+        <EmptyState icon={Users} title="None sent" sub="Assign a substitute when filing a leave request to see it here." />
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {fromMe.map((s) => (
+            <div key={s.id} style={{ ...cardStyle, padding: 16, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+              <div>
+                <div style={{ fontFamily: "Inter, sans-serif", fontSize: 13.5, color: C.ink, fontWeight: 600 }}>{s.substituteName}</div>
+                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11.5, color: C.inkSoft }}>{s.substituteEmail}</div>
+              </div>
+              <StatusStamp status={s.status === "Declined" ? "Rejected" : s.status === "Accepted" ? "Approved" : "Pending"} size="sm" />
+            </div>
+          ))}
+        </div>
+      )}
+      {decidedToMe.length > 0 && (
+        <>
+          <div style={{ fontFamily: "Inter, sans-serif", fontSize: 12.5, color: C.inkSoft, margin: "28px 0 10px", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+            Your past responses
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {decidedToMe.map((s) => (
+              <div key={s.id} style={{ ...cardStyle, padding: 16, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+                <div style={{ fontFamily: "Inter, sans-serif", fontSize: 13.5, color: C.ink, fontWeight: 600 }}>{s.facultyName}</div>
+                <StatusStamp status={s.status === "Declined" ? "Rejected" : "Approved"} size="sm" />
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------- */
+/*  Timetable view                                                         */
+/* ---------------------------------------------------------------------- */
+
+function TimetableView({ profile, token }) {
+  const [grid, setGrid] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      try {
+        const g = await fetchTimetable(profile.email, token);
+        if (!cancelled) setGrid(g);
+      } catch {
+        if (!cancelled) setGrid({});
+      }
+      if (!cancelled) setLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [profile.email, token]);
+
+  return (
+    <div>
+      <SectionHeading eyebrow={profile.name} title="Weekly timetable" />
+      {loading ? (
+        <div style={{ padding: 40, textAlign: "center" }}><Loader2 className="spin" size={22} color={C.ink} /></div>
+      ) : Object.keys(grid).length === 0 ? (
+        <EmptyState icon={Clock} title="No timetable set" sub="Ask your administrator to add your weekly schedule." />
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 640 }}>
+            <thead>
+              <tr>
+                <th style={ttHeadStyle}></th>
+                {TIMETABLE_PERIODS.map((p) => (
+                  <th key={p} style={ttHeadStyle}>Period {p}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {TIMETABLE_DAYS.map((day) => (
+                <tr key={day}>
+                  <td style={{ ...ttCellStyle, fontWeight: 600, fontFamily: "Lora, serif", background: C.paperDeep }}>{day}</td>
+                  {TIMETABLE_PERIODS.map((p) => {
+                    const cls = grid[`${day}-${p}`];
+                    const isFree = !cls || cls === "Free";
+                    return (
+                      <td key={p} style={{ ...ttCellStyle, color: isFree ? C.inkSoft : C.ink, fontWeight: isFree ? 400 : 600 }}>
+                        {cls || "--"}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+const ttHeadStyle = {
+  padding: "10px 12px", textAlign: "left", fontFamily: "Inter, sans-serif", fontSize: 11.5,
+  color: C.inkSoft, textTransform: "uppercase", letterSpacing: "0.05em", borderBottom: `2px solid ${C.rule}`,
+};
+const ttCellStyle = {
+  padding: "10px 12px", fontFamily: "Inter, sans-serif", fontSize: 13, borderBottom: `1px solid ${C.rule}`,
+  whiteSpace: "nowrap",
+};
+
+
   const [tab, setTab] = useState("pending");
   const sortedHistory = [...history].sort((a, b) => new Date(b.actionedOn || b.appliedOn) - new Date(a.actionedOn || a.appliedOn));
 
