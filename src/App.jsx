@@ -1566,4 +1566,223 @@ function DashboardView({ isFaculty, profile, myRequests, onGoNew }) {
         <EmptyState
           icon={Inbox}
           title="No entries yet"
-          sub={isFaculty ? "File your fir
+          sub={isFaculty ? "File your first leave or permission request to get started." : "No requests filed for this department yet."}
+        />
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {recent.map((r) => (
+            <RequestCard key={r.id} req={r} showFaculty={!isFaculty} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------- */
+/*  Approvals view (HOD)                                                   */
+/* ---------------------------------------------------------------------- */
+
+/* ---------------------------------------------------------------------- */
+/*  Cover requests view (Faculty)                                          */
+/* ---------------------------------------------------------------------- */
+
+function CoverRequestsView({ profile, subRequests, onRespond }) {
+  const toMe = subRequests.filter((s) => s.substituteEmail === profile.email);
+  const fromMe = subRequests.filter((s) => s.facultyEmail === profile.email);
+  const pendingToMe = toMe.filter((s) => s.status === "Pending");
+  const decidedToMe = toMe.filter((s) => s.status !== "Pending");
+
+  return (
+    <div>
+      <SectionHeading eyebrow="Coverage" title="Cover Requests" />
+
+      <div style={{ fontFamily: "Inter, sans-serif", fontSize: 12.5, color: C.inkSoft, marginBottom: 10, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+        Waiting on your response
+      </div>
+      {pendingToMe.length === 0 ? (
+        <EmptyState icon={Users} title="Nothing pending" sub="No one has asked you to cover their classes right now." />
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 28 }}>
+          {pendingToMe.map((s) => (
+            <div key={s.id} style={{ ...cardStyle, padding: 16 }}>
+              <div style={{ fontFamily: "Lora, serif", fontSize: 15.5, color: C.ink, fontWeight: 600, marginBottom: 4 }}>
+                {s.facultyName} needs coverage
+              </div>
+              <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11.5, color: C.inkSoft, marginBottom: 12 }}>
+                Requested {timeAgo(s.createdAt)}
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  onClick={() => onRespond(s.id, "Accepted")}
+                  style={{ ...primaryBtnStyle, background: C.stampGreen, flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
+                >
+                  <Check size={15} /> Accept
+                </button>
+                <button
+                  onClick={() => onRespond(s.id, "Declined")}
+                  style={{ ...primaryBtnStyle, background: "transparent", color: C.stampRed, border: `1.5px solid ${C.stampRed}`, flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
+                >
+                  <X size={15} /> Decline
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{ fontFamily: "Inter, sans-serif", fontSize: 12.5, color: C.inkSoft, marginBottom: 10, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+        Requests you've sent
+      </div>
+      {fromMe.length === 0 ? (
+        <EmptyState icon={Users} title="None sent" sub="Assign a substitute when filing a leave request to see it here." />
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {fromMe.map((s) => (
+            <div key={s.id} style={{ ...cardStyle, padding: 16, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+              <div>
+                <div style={{ fontFamily: "Inter, sans-serif", fontSize: 13.5, color: C.ink, fontWeight: 600 }}>{s.substituteName}</div>
+                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11.5, color: C.inkSoft }}>{s.substituteEmail}</div>
+              </div>
+              <StatusStamp status={s.status === "Declined" ? "Rejected" : s.status === "Accepted" ? "Approved" : "Pending"} size="sm" />
+            </div>
+          ))}
+        </div>
+      )}
+      {decidedToMe.length > 0 && (
+        <>
+          <div style={{ fontFamily: "Inter, sans-serif", fontSize: 12.5, color: C.inkSoft, margin: "28px 0 10px", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+            Your past responses
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {decidedToMe.map((s) => (
+              <div key={s.id} style={{ ...cardStyle, padding: 16, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+                <div style={{ fontFamily: "Inter, sans-serif", fontSize: 13.5, color: C.ink, fontWeight: 600 }}>{s.facultyName}</div>
+                <StatusStamp status={s.status === "Declined" ? "Rejected" : "Approved"} size="sm" />
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------- */
+/*  Timetable view                                                         */
+/* ---------------------------------------------------------------------- */
+
+function TimetableView({ profile, token }) {
+  const [grid, setGrid] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      try {
+        const g = await fetchTimetable(profile.email, token);
+        if (!cancelled) setGrid(g);
+      } catch {
+        if (!cancelled) setGrid({});
+      }
+      if (!cancelled) setLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [profile.email, token]);
+
+  return (
+    <div>
+      <SectionHeading eyebrow={profile.name} title="Weekly timetable" />
+      {loading ? (
+        <div style={{ padding: 40, textAlign: "center" }}><Loader2 className="spin" size={22} color={C.ink} /></div>
+      ) : Object.keys(grid).length === 0 ? (
+        <EmptyState icon={Clock} title="No timetable set" sub="Ask your administrator to add your weekly schedule." />
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 640 }}>
+            <thead>
+              <tr>
+                <th style={ttHeadStyle}></th>
+                {TIMETABLE_PERIODS.map((p) => (
+                  <th key={p} style={ttHeadStyle}>Period {p}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {TIMETABLE_DAYS.map((day) => (
+                <tr key={day}>
+                  <td style={{ ...ttCellStyle, fontWeight: 600, fontFamily: "Lora, serif", background: C.paperDeep }}>{day}</td>
+                  {TIMETABLE_PERIODS.map((p) => {
+                    const cls = grid[`${day}-${p}`];
+                    const isFree = !cls || cls === "Free";
+                    return (
+                      <td key={p} style={{ ...ttCellStyle, color: isFree ? C.inkSoft : C.ink, fontWeight: isFree ? 400 : 600 }}>
+                        {cls || "--"}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+const ttHeadStyle = {
+  padding: "10px 12px", textAlign: "left", fontFamily: "Inter, sans-serif", fontSize: 11.5,
+  color: C.inkSoft, textTransform: "uppercase", letterSpacing: "0.05em", borderBottom: `2px solid ${C.rule}`,
+};
+const ttCellStyle = {
+  padding: "10px 12px", fontFamily: "Inter, sans-serif", fontSize: 13, borderBottom: `1px solid ${C.rule}`,
+  whiteSpace: "nowrap",
+};
+
+
+  const [tab, setTab] = useState("pending");
+  const sortedHistory = [...history].sort((a, b) => new Date(b.actionedOn || b.appliedOn) - new Date(a.actionedOn || a.appliedOn));
+
+  return (
+    <div>
+      <SectionHeading eyebrow="Review desk" title="Approvals" />
+      <div style={{ display: "flex", gap: 8, marginBottom: 18 }}>
+        {[{ k: "pending", l: `Pending (${pending.length})` }, { k: "history", l: "History" }].map(({ k, l }) => (
+          <button
+            key={k}
+            onClick={() => setTab(k)}
+            style={{
+              padding: "7px 14px", borderRadius: 6, cursor: "pointer",
+              border: `1.5px solid ${tab === k ? C.ink : C.rule}`,
+              background: tab === k ? C.ink : "transparent",
+              color: tab === k ? C.paper : C.inkSoft, fontFamily: "Inter, sans-serif", fontSize: 13, fontWeight: 600,
+            }}
+          >
+            {l}
+          </button>
+        ))}
+      </div>
+
+      {tab === "pending" ? (
+        pending.length === 0 ? (
+          <EmptyState icon={CheckSquare} title="All caught up" sub="No pending requests waiting on your review." />
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {pending.map((r) => (
+              <RequestCard key={r.id} req={r} showFaculty actions={<ApprovalActions req={r} onAction={onAction} />} />
+            ))}
+          </div>
+        )
+      ) : sortedHistory.length === 0 ? (
+        <EmptyState icon={ClipboardList} title="No decisions yet" sub="Approved and rejected requests will be listed here." />
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {sortedHistory.map((r) => (
+            <RequestCard key={r.id} req={r} showFaculty />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
