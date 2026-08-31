@@ -58,6 +58,8 @@ Requires a Supabase project with the schema set up (see `/sql` for setup scripts
 ## Author
 
 Built by [Karthikeyan P](https://github.com/karthikn046) — B.Sc. Computer Science, D.G. Vaishnav College.
+
+
 <img width="300" height="600" alt="WhatsApp Image 2026-08-31 at 10 34 49 AM" src="https://github.com/user-attachments/assets/ab4a8a02-ea15-42b3-9233-1153dd378e20" />
 <img width="300" height="600" alt="WhatsApp Image 2026-08-31 at 10 34 49 AM (1)" src="https://github.com/user-attachments/assets/dd32385c-3b49-4ebb-a6bd-6986b1242ede" />
 <img width="300" height="600" alt="WhatsApp Image 2026-08-31 at 10 34 49 AM (2)" src="https://github.com/user-attachments/assets/14a28ae3-062e-4152-8938-5c858ce82ac2" />
