@@ -1740,7 +1740,7 @@ const ttCellStyle = {
   whiteSpace: "nowrap",
 };
 
-
+function ApprovalsView({ pending, onAction, history }) {
   const [tab, setTab] = useState("pending");
   const sortedHistory = [...history].sort((a, b) => new Date(b.actionedOn || b.appliedOn) - new Date(a.actionedOn || a.appliedOn));
 
